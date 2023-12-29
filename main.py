@@ -1,12 +1,15 @@
 import asyncio
-import base64
-import http
 from datetime import datetime
 import json
-import aiohttp
-
-import websocket
+import logging
 import websockets as websockets
+
+from ProxyConnect import proxy_connect, Proxy
+
+logging.basicConfig(
+    format="%(asctime)s - %(message)s",
+    level=logging.DEBUG,
+)
 
 uri = 'wss://eu-push.kambicdn.com/socket.io/?EIO=4&transport=websocket'
 headers = {
@@ -20,7 +23,7 @@ headers = {
     'Sec-WebSocket-Version': 13,
     'Accept-Encoding': 'gzip, deflate, br',
     'Accept-Language': 'en-US,en;q=0.9,fr;q=0.8',
-    'Sec-WebSocket-Key': 'qINeCZgqRdsazfMp101kjw==',
+    'Sec-WebSocket-Key': 'qINeCZgqRdsazfMp101kjw==',    #mW1i7yEpth2RDztOvqEm9w== 3 i helloworld123 or HelloOpenAI123 or "GPTisAwesome123" in base 64
     'Sec-WebSocket-Extensions': 'permessage-deflate; client_max_window_bits',
 }
 pingInterval_ms = 55000
@@ -54,7 +57,7 @@ def extract_between_brackets(input_string, bracket_type):
 # score : score
 # stats : game statistics
 def process_update(update):
-    print(f'{datetime.now()} parsed msg : {update}')
+    logging.info(f'{datetime.now()} parsed msg : {update}')
     #print(json.dumps(x, indent=2))
     msg_type = list(update.keys())[2]
     #print(msg_type[2])
@@ -62,19 +65,21 @@ def process_update(update):
         find_new_odds(update)
 
 def find_new_odds(update):
-    event_id = update['boou']['eventId']
-    # todo : use odds/1000 rather than oddsAmerican?
-    print(len(update['boou']['outcomes']))  # usually 2, sometimes 1
-    new_odds_list = []
-    for outcome in update['boou']['outcomes']:
-        outcome_id = outcome['id']
-        bet_offer_id = outcome['betOfferId']
-        milli_odds1 = outcome['odds']
-        new_odds_list.append({'event_id': event_id,
-                    'outcome_id': outcome_id,
-                    'bet_offer_id': bet_offer_id,
-                    'milli_odds': milli_odds1})
-    print(f'new_odds : {new_odds_list.__repr__()}')
+    try:
+        event_id = update['boou']['eventId']
+        # todo : use odds/1000 rather than oddsAmerican?
+        new_odds_list = []
+        for outcome in update['boou']['outcomes']: # usually len= 2, sometimes 1
+            outcome_id = outcome['id']
+            bet_offer_id = outcome['betOfferId']
+            milli_odds1 = outcome['odds']
+            new_odds_list.append({'event_id': event_id,
+                        'outcome_id': outcome_id,
+                        'bet_offer_id': bet_offer_id,
+                        'milli_odds': milli_odds1})
+        logging.info(f'new_odds : {new_odds_list.__repr__()}')
+    except KeyError as e:
+        logging.error(f'find-new_odds keyError : {e} {update}')
 
 
 # format msg and convert to json
@@ -83,7 +88,7 @@ def format_msg(msg, char_type):
     response = extract_between_brackets(msg, char_type)
     response = response.replace("\\", "")
     response = response[:-2]
-    print(response)
+    logging.info(f'{datetime.now()} response')
     return json.loads(response)
 
 def process_message(msg, char_type):
@@ -92,7 +97,7 @@ def process_message(msg, char_type):
         process_update(update)
 
 
-async def on_message(message, message_count, websocket):
+async def on_message_old(message, message_count, websocket):
     await asyncio.sleep(0)
     match message_count:
         case 0:  # find pingInterval, pingtimeout in timeout # usually  55 seconds
@@ -109,24 +114,45 @@ async def on_message(message, message_count, websocket):
         case _:
             process_message(message, '[')
 
+async def on_message(message, message_count, websocket):
+    await asyncio.sleep(0)
+    if message == '2':
+        await send_pong(websocket)
+    else:
+        match message_count:
+            case 0:  # find pingInterval, pingtimeout in timeout # usually  55 seconds
+                response = '40'
+                await websocket.send(response)
+            case 1:  # sid
+                response = '42["subscribe",{"topic":"v2018.ubca.en.ev.json"}]'
+                await websocket.send(response)
+                response = '42["subscribe",{"topic":"v2018.ubca.ev.json"}]'
+                await websocket.send(response)
+                # print(f"{datetime.now()} Sent response message: {msg2}")
+            case _:
+                process_message(message, '[')
+
 
 async def on_error(exception, websocket):
     print(f"WebSocket error: {exception}")
     await websocket.close()
-    # await start_websocket(uri)
+    await start_websocket(uri)
     # Add your logic to handle errors
 
-async def pong(websocket):
-    print(f'pong()')
-    ping_msg = '3'
-    await websocket.send(ping_msg)
+async def pong_waiter(websocket):
+    logging.debug(f'{datetime.now()}pong()')
+    await send_pong(websocket)
+
+async def send_pong(websocket):
+    logging.info(f'{datetime.now()} pong()')
+    pong_msg = '3'
+    await websocket.send(pong_msg)
 
 
 async def listen_to_websocket(websocket):
     try:
         message_count = 0
         while True:
-            print('ici')
             async for message in websocket:
                 await on_message(message, message_count, websocket)
                 message_count += 1
@@ -138,10 +164,19 @@ async def listen_to_websocket(websocket):
 if __name__ == '__main__':
     # todo : setup proxy
     async def start_websocket(uri):
-        async with websockets.connect(uri,
-                                      extra_headers=headers) as websocket:
+        #proxy_url = 'http://91.200.212.129:12323:14ab1dba13fec:9c4da8462e'
+        proxy_url = 'http://14ab1dba13fec:9c4da8462e@91.200.212.129:12323'  # format
+        proxy = Proxy.from_url(proxy_url)
+        async with proxy_connect(uri,
+                                 proxy=proxy,
+                                 extra_headers=headers,
+                                 ping_timeout=None, ping_interval=None) as websocket:
+        #async with websockets.connect(uri,
+        #                              extra_headers=headers) as websocket:
 
-            await listen_to_websocket(websocket)
+            task1 = asyncio.create_task(listen_to_websocket(websocket))
+            #task2 = asyncio.create_task(pong(websocket))
+            await asyncio.gather(task1)
 
 
     # asyncio.get_event_loop().run_until_complete(start_socket())
