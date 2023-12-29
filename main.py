@@ -44,65 +44,77 @@ def extract_between_brackets(input_string, bracket_type):
     else:
         return None
 
+# message types  :
+# mcu : match clock update
+# mt :
+# bor : bet offer (new?)
+# boou : bet outcomes odds update (could be new odds, or suspended = False)
+# boa : bet odds ? (SUSPENDED - à valider)
+# bosu : bet offer (SUSPENDED valider)
+# score : score
+# stats : game statistics
+def process_update(update):
+    print(f'{datetime.now()} parsed msg : {update}')
+    #print(json.dumps(x, indent=2))
+    msg_type = list(update.keys())[2]
+    #print(msg_type[2])
+    if msg_type == 'boou':
+        find_new_odds(update)
 
-def parse(x):
-    print(f'{datetime.now()} parse : {x}')
-    # print(json.dumps(x, indent=2))
+def find_new_odds(update):
+    event_id = update['boou']['eventId']
+    # todo : use odds/1000 rather than oddsAmerican?
+    print(len(update['boou']['outcomes']))  # usually 2, sometimes 1
+    new_odds_list = []
+    for outcome in update['boou']['outcomes']:
+        outcome_id = outcome['id']
+        bet_offer_id = outcome['betOfferId']
+        milli_odds1 = outcome['odds']
+        new_odds_list.append({'event_id': event_id,
+                    'outcome_id': outcome_id,
+                    'bet_offer_id': bet_offer_id,
+                    'milli_odds': milli_odds1})
+    print(f'new_odds : {new_odds_list.__repr__()}')
 
+
+# format msg and convert to json
+def format_msg(msg, char_type):
+    #print(f'format msg : {msg}')
+    response = extract_between_brackets(msg, char_type)
+    response = response.replace("\\", "")
+    response = response[:-2]
+    print(response)
+    return json.loads(response)
 
 def process_message(msg, char_type):
-    # format msg and convert to json
-    def format_msg(msg):
-        print(f'format msg : {msg}')
-        response = extract_between_brackets(msg, char_type)
-        response = response.replace("\\", "")
-        response = response[:-2]
-        print(response)
-        return json.loads(response)
-
-    # if 'ping' in msg:
-
-    response_json = format_msg(msg)
-    for x in response_json:
-        parse(x)
+    response_json = format_msg(msg, char_type)
+    for update in response_json:
+        process_update(update)
 
 
 async def on_message(message, message_count, websocket):
     await asyncio.sleep(0)
-    print(f'{datetime.now()} msg {message_count} : {message}')
-    if message == '2':  # '2' means ping for unibet
-        await pong()
-    else:
-        match message_count:
-            case 0:  # find pingInterval, pingtimeout in timeout # usually  55 seconds
-                response = '42["subscribe",{"topic":"v2018.ubca.ev.json"}]'
-                message = json.loads(message[1:])
-                pingInterval = message["pingInterval"]  # todo : store in class variable
-                #print(f'pingInterval : {pingInterval}')
-                await websocket.send(response)
-                # print(f"{datetime.now()} Sent response message: {msg1}")
-            case 1:  # sid
-                response = '42["subscribe",{"topic":"v2018.ubca.en.ev.json"}]'
-                await websocket.send(response)
-                # print(f"{datetime.now()} Sent response message: {msg2}")
-            case _:
-                pass
+    match message_count:
+        case 0:  # find pingInterval, pingtimeout in timeout # usually  55 seconds
+            response = '42["subscribe",{"topic":"v2018.ubca.ev.json"}]'
+            message = json.loads(message[1:])
+            pingInterval = message["pingInterval"]  # todo : store in class variable
+            # print(f'pingInterval : {pingInterval}')
+            await websocket.send(response)
+            # print(f"{datetime.now()} Sent response message: {msg1}")
+        case 1:  # sid
+            response = '42["subscribe",{"topic":"v2018.ubca.en.ev.json"}]'
+            await websocket.send(response)
+            # print(f"{datetime.now()} Sent response message: {msg2}")
+        case _:
+            process_message(message, '[')
 
 
 async def on_error(exception, websocket):
     print(f"WebSocket error: {exception}")
     await websocket.close()
-    #await start_websocket(uri)
+    # await start_websocket(uri)
     # Add your logic to handle errors
-
-
-async def ping(websocket, pingInterval_ms):
-    pingInterval_sec = pingInterval_ms / 1000
-    while True:
-        print(f'ping()')
-        await asyncio.sleep(pingInterval_sec)
-        ping_msg = '3'
-        await websocket.send(ping_msg)
 
 async def pong(websocket):
     print(f'pong()')
@@ -114,6 +126,7 @@ async def listen_to_websocket(websocket):
     try:
         message_count = 0
         while True:
+            print('ici')
             async for message in websocket:
                 await on_message(message, message_count, websocket)
                 message_count += 1
@@ -128,22 +141,7 @@ if __name__ == '__main__':
         async with websockets.connect(uri,
                                       extra_headers=headers) as websocket:
 
-            #asyncio.create_task(ping(websocket, pingInterval_ms))
-            try:
-                message_count = 0
-                while True:
-                    async for message in websocket:
-                        await on_message(message, message_count, websocket)
-                        message_count += 1
-
-            except websockets.exceptions.WebSocketException as e:
-                await on_error(e, websocket)
-
-            #await asyncio.gather(asyncio.create_task(listen_to_websocket(websocket)),
-            #                     asyncio.create_task(ping(websocket, pingInterval_ms)))
-
-
-
+            await listen_to_websocket(websocket)
 
 
     # asyncio.get_event_loop().run_until_complete(start_socket())
